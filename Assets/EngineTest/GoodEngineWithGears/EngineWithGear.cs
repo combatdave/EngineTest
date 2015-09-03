@@ -1,52 +1,54 @@
 ﻿using UnityEngine;
 using System.Collections;
 using System.Collections.Generic;
-using UnityEngine.UI;
 
 
 public class EngineWithGear : MonoBehaviour
 {
-    public Text torqueText;
-    public Text engineOutputRPMText;
-    public Text transmissionInputRPMText;
-    public Text clutchText;
-    public Text gearText;
-    public Text transmissionOutputRPMText;
+    public AnimationCurve torqueCurve;
 
-    public GameObject engineOutputVisual;
-    public GameObject transmissionInputVisual;
-    public GameObject transmissionOutputVisual;
+    public float Throttle { get; private set; }
+    public float EngineTorque
+    {
+        get
+        {
+            return Throttle * torqueCurve.Evaluate(EngineHelpers.SpeedToRPM(EngineSpeed));
+        }
+    }
 
-    public float maxTorque = 200f;
-    public float engineTorque;
+    public float EngineSpeed { get; private set; }
+    public float TransmissionInputSpeed {get; private set; }
 
-    public float engineSpeed;
-    public float transmissionInputSpeed;
-
-    public float engineMOI = 10f;
-    public float transmissionInputMOI = 10f;
+    public float engineMOI = 1f;
+    public float transmissionInputMOI = 1f;
     public float transmissionOuputMOI = 1000f;
 
-    public float engineDamping = 1f;
-    public float transmissionInputDamping = 1f;
-    public float transmissionOutputDamping = 10f;
+    public float engineDamping = 0.2f;
+    public float transmissionInputDamping = 0.01f;
+    public float transmissionOutputDamping = 2f;
 
-    public bool clutchLocked = true;
+    public bool ClutchLocked {get; private set; }
 
-    public float torqueOnTransmissionOutput = 0f;
+    public float TorqueOnTransmissionOutput { get; set; }
 
-    public float clutchKineticFrictionConstant = 500f;
-    public float clutchStaticFrictionConstant = 600f;
+    public float clutchKineticFrictionConstant = 1000f;
+    public float clutchStaticFrictionConstant = 1200f;
 
-    public float clutchAmount = 0f;
+    public float ClutchAmount { get; private set; }
 
-    public float engineOutputMinZ = 0.614f;
-    public float engineOutputMaxZ = 0.685f;
+    public int CurrentGear { get; private set; }
+    public float[] gearRatios = { 5f, 2f, 1.2f, 0.8f, 0.4f };
+
+    public HeatModule clutchHeatModule;
+    public float clutchFrictionToHeat = 0.1f;
+
+    public HeatModule engineHeatModule;
+    public float engineHeatMultiplier = 0.1f;
 
 
     void FixedUpdate()
     {
-        if (clutchLocked)
+        if (ClutchLocked)
         {
             UpdateClutchLocked();
         }
@@ -55,14 +57,7 @@ public class EngineWithGear : MonoBehaviour
             UpdateClutchSlipping();
         }
 
-
-        UpdateEngineOutputVisuals();
-        UpdateTransmissionInputVisuals();
-        UpdateTransmissionOutputVisuals();
-
-        engineOutputRPMText.text = "Engine RPM: " + SpeedToRPM(engineSpeed).ToString("0");
-        transmissionInputRPMText.text = "In RPM: " + SpeedToRPM(transmissionInputSpeed).ToString("0");
-        transmissionOutputRPMText.text = "Out RPM: " + SpeedToRPM(GetTransmissionOutputSpeed()).ToString("0");
+        engineHeatModule.AddHeat((Mathf.Pow(4 * Throttle, 2f) * EngineSpeed * engineHeatMultiplier * Time.fixedDeltaTime) + 1f * Time.fixedDeltaTime);
     }
 
 
@@ -79,52 +74,50 @@ public class EngineWithGear : MonoBehaviour
         // Wt. = (Tout - BtWt + Tcl) / It
 
         // Torques on either side of the clutch (not including clutch)
-        float engineTorqueWithoutClutch = engineTorque - (engineDamping * engineSpeed);
-        float transmissionDamping = GetTotalTransmissionDampingOnInput() * transmissionInputSpeed;
+        float engineTorqueWithoutClutch = EngineTorque - (engineDamping * EngineSpeed);
+        float transmissionDamping = GetTotalTransmissionDampingOnInput() * TransmissionInputSpeed;
         float transmissionTorqueWithoutClutch = GetTransmissionTorqueOnInput() - transmissionDamping;
 
         // Torques on both sides (not clutch) into angular accelerations
         float engineAccelerationNoClutch = engineTorqueWithoutClutch / engineMOI;
         float transmissionInputAccelerationNoClutch = transmissionTorqueWithoutClutch / GetTotalTransmissionMOIOnInput();
 
-        engineSpeed += engineAccelerationNoClutch * Time.fixedDeltaTime;
-        transmissionInputSpeed += transmissionInputAccelerationNoClutch * Time.fixedDeltaTime;
+        EngineSpeed += engineAccelerationNoClutch * Time.fixedDeltaTime;
+        TransmissionInputSpeed += transmissionInputAccelerationNoClutch * Time.fixedDeltaTime;
 
         // Torque on the clutch
         float clutchForce = GetMaxKineticClutchForce();
         float torqueThroughClutch = 0f;
-        torqueThroughClutch = Mathf.Sign(engineSpeed - transmissionInputSpeed) * clutchForce;
+        torqueThroughClutch = Mathf.Sign(EngineSpeed - TransmissionInputSpeed) * clutchForce;
 
         // Torques on both sides (including clutch torque) into angular accelerations
         float engineAccelerationFromClutch = -torqueThroughClutch / engineMOI;
         float transmissionInputAccelerationFromClutch = torqueThroughClutch / GetTotalTransmissionMOIOnInput();
 
         float totalAttemptedDeltaSpeed = (Mathf.Abs(engineAccelerationFromClutch) + Mathf.Abs(transmissionInputAccelerationFromClutch)) * Time.fixedDeltaTime;
-        float allowedDeltaSpeed = Mathf.Abs(engineSpeed - transmissionInputSpeed);
+        float allowedDeltaSpeed = Mathf.Abs(EngineSpeed - TransmissionInputSpeed);
 
         float torqueScale = 1f;
         if (totalAttemptedDeltaSpeed > allowedDeltaSpeed)
         {
             torqueScale = allowedDeltaSpeed / totalAttemptedDeltaSpeed;
-            clutchLocked = true;
+            ClutchLocked = true;
         }
 
         engineAccelerationFromClutch *= torqueScale;
         transmissionInputAccelerationFromClutch *= torqueScale;
 
-        engineSpeed += engineAccelerationFromClutch * Time.fixedDeltaTime;
-        transmissionInputSpeed += transmissionInputAccelerationFromClutch * Time.fixedDeltaTime;
+        EngineSpeed += engineAccelerationFromClutch * Time.fixedDeltaTime;
+        TransmissionInputSpeed += transmissionInputAccelerationFromClutch * Time.fixedDeltaTime;
 
         // Heat
         float actualTorqueThroughClutch = torqueThroughClutch * torqueScale;
-        float speedDifference = engineSpeed - transmissionInputSpeed;
-        float energyGenerated = actualTorqueThroughClutch * speedDifference * clutchFrictionToHeat;
+        //float speedDifference = EngineSpeed - TransmissionInputSpeed;
+        float energyGenerated = actualTorqueThroughClutch * clutchFrictionToHeat; // * speedDifference
 
-        totalHeat += energyGenerated * 0.000526565076466f * Time.fixedDeltaTime; 
+        clutchHeatModule.AddHeat(energyGenerated * 0.000526565076466f * Time.fixedDeltaTime); 
     }
 
-    public float clutchFrictionToHeat = 0.1f;
-    public float totalHeat = 20f;
 
     private void UpdateClutchLocked()
     {
@@ -141,7 +134,7 @@ public class EngineWithGear : MonoBehaviour
         // (Ie + It)W. = Tin + Tout - (Be + Bt)W
         // W. = Tin + Tout - (Be + Bt)W / (Ie + It)
 
-        float currentLinkedSpeed = engineSpeed;
+        float currentLinkedSpeed = EngineSpeed;
 
         // Damping
         float currentEngineDampingTorque = engineDamping * currentLinkedSpeed;
@@ -149,16 +142,16 @@ public class EngineWithGear : MonoBehaviour
         float dampingTorque = currentEngineDampingTorque + currentTransmissionDampingTorque;
 
         // Torque to acceleration
-        float linkedAcceleration = (engineTorque + GetTransmissionTorqueOnInput() - dampingTorque) / (engineMOI + GetTotalTransmissionMOIOnInput());
+        float linkedAcceleration = (EngineTorque + GetTransmissionTorqueOnInput() - dampingTorque) / (engineMOI + GetTotalTransmissionMOIOnInput());
         currentLinkedSpeed += linkedAcceleration * Time.fixedDeltaTime;
 
-        engineSpeed = currentLinkedSpeed;
-        transmissionInputSpeed = currentLinkedSpeed;
+        EngineSpeed = currentLinkedSpeed;
+        TransmissionInputSpeed = currentLinkedSpeed;
 
         // Calculate torque on clutch
         // Tc = -IeTout + ItTin - (ItBe - IeBt)W   /   (Ie + It)
         float part1 = engineMOI * GetTransmissionTorqueOnInput();
-        float part2 = GetTotalTransmissionMOIOnInput() * engineTorque;
+        float part2 = GetTotalTransmissionMOIOnInput() * EngineTorque;
         float part3 = -((GetTotalTransmissionMOIOnInput() * engineDamping) - (engineMOI * GetTotalTransmissionDampingOnInput())) * currentLinkedSpeed;
         float part4 = engineMOI + GetTotalTransmissionMOIOnInput();
 
@@ -166,20 +159,23 @@ public class EngineWithGear : MonoBehaviour
 
         if (Mathf.Abs(torqueThroughClutch) > GetMaxStaticClutchForce())
         {
-            clutchLocked = false;
+            ClutchLocked = false;
         }
+
+        float energyGenerated = torqueThroughClutch * clutchFrictionToHeat;
+        clutchHeatModule.AddHeat(energyGenerated * 0.000526565076466f * Time.fixedDeltaTime); 
     }
 
 
     private float GetMaxKineticClutchForce()
     {
-        return clutchKineticFrictionConstant * clutchAmount;
+        return clutchKineticFrictionConstant * ClutchAmount;
     }
 
 
     private float GetMaxStaticClutchForce()
     {
-        return clutchKineticFrictionConstant * clutchAmount;
+        return clutchKineticFrictionConstant * ClutchAmount;
     }
 
 
@@ -197,89 +193,46 @@ public class EngineWithGear : MonoBehaviour
 
     private float GetTransmissionTorqueOnInput()
     {
-        return torqueOnTransmissionOutput * GetGearRatio();
-    }
-
-
-    private void UpdateEngineOutputVisuals()
-    {
-        float angle = engineOutputVisual.transform.localRotation.eulerAngles.z;
-        angle += engineSpeed * Mathf.Rad2Deg * Time.deltaTime;
-        engineOutputVisual.transform.localRotation = Quaternion.Euler(new Vector3(0f, 0f, angle));
-    }
-
-
-    private void UpdateTransmissionInputVisuals()
-    {
-        float angle = transmissionInputVisual.transform.localRotation.eulerAngles.z;
-        angle += transmissionInputSpeed * Mathf.Rad2Deg * Time.fixedDeltaTime;
-        transmissionInputVisual.transform.localRotation = Quaternion.Euler(new Vector3(0f, 0f, angle));
-    }
-
-
-    private void UpdateTransmissionOutputVisuals()
-    {
-        float angle = transmissionOutputVisual.transform.localRotation.eulerAngles.z;
-        angle += GetTransmissionOutputSpeed() * Mathf.Rad2Deg * Time.fixedDeltaTime;
-        transmissionOutputVisual.transform.localRotation = Quaternion.Euler(new Vector3(0f, 0f, angle));
+        return TorqueOnTransmissionOutput * GetGearRatio();
     }
 
 
     public void OnThrottleChanged(float value)
     {
-        engineTorque = value * maxTorque;
-
-        torqueText.text = "Torque: " + engineTorque;
+        Throttle = value;
     }
 
 
     public void OnClutchChanged(float value)
     {
-        clutchAmount = value;
-
-        Vector3 p = engineOutputVisual.transform.localPosition;
-        p.z = Mathf.Lerp(engineOutputMinZ, engineOutputMaxZ, clutchAmount);
-        engineOutputVisual.transform.localPosition = p;
-
-        clutchText.text = "Clutch: " + clutchAmount;
-    }
-
-
-    public float SpeedToRPM(float speed)
-    {
-        return 60f * speed / (2f * Mathf.PI);
+        ClutchAmount = value;
     }
 
 
     public float GetGearRatio()
     {
-        return gearRatios[currentGear];
+        return gearRatios[CurrentGear];
     }
 
 
     public float GetTransmissionOutputSpeed()
     {
-        return transmissionInputSpeed / GetGearRatio();
+        return TransmissionInputSpeed / GetGearRatio();
     }
 
 
-    public int currentGear = 0;
-    public float[] gearRatios = {5f, 2f, 1.2f, 0.8f, 0.4f};
-
     public bool SetGear(int newGear)
     {
-        if (clutchAmount >= float.Epsilon)
+        if (ClutchAmount >= float.Epsilon)
         {
             return false;
         }
 
-        float outputSpeed = transmissionInputSpeed / GetGearRatio();
+        float outputSpeed = TransmissionInputSpeed / GetGearRatio();
 
-        currentGear = newGear;
+        CurrentGear = newGear;
 
-        transmissionInputSpeed = outputSpeed * GetGearRatio();
-
-        gearText.text = "" + (currentGear + 1);
+        TransmissionInputSpeed = outputSpeed * GetGearRatio();
 
         return true;
     }
@@ -287,7 +240,7 @@ public class EngineWithGear : MonoBehaviour
 
     public void Downshift()
     {
-        int newGear = currentGear - 1;
+        int newGear = CurrentGear - 1;
         if (newGear >= 0)
         {
             SetGear(newGear);
@@ -297,7 +250,7 @@ public class EngineWithGear : MonoBehaviour
 
     public void Upshift()
     {
-        int newGear = currentGear + 1;
+        int newGear = CurrentGear + 1;
         if (newGear < gearRatios.Length)
         {
             SetGear(newGear);

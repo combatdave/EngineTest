@@ -66,8 +66,6 @@ public class Engine1 : MonoBehaviour
 
 
         // Assume the engine is faster
-        float deltaV = engineVelocity - (transmissionOutputVelocity * transmissionGearRatio);
-
 
         //if (clutch > 0f && transmissionGearRatio > 0f)
         //{
