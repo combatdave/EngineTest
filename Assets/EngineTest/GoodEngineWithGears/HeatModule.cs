@@ -49,6 +49,12 @@ public class HeatModule : MonoBehaviour
     }
 
 
+    public void ConsumeHeat(float amount)
+    {
+        CurrentTemperature -= amount;
+    }
+
+
     public float GetSafeness()
     {
         return Mathf.Clamp01((CurrentTemperature - ambientTemperature) / (maxSafeTemperature - ambientTemperature));

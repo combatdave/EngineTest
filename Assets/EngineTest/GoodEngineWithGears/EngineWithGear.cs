@@ -7,7 +7,8 @@ public class EngineWithGear : MonoBehaviour
 {
     public AnimationCurve torqueCurve;
 
-    public float Throttle { get; private set; }
+    public float Throttle { get; set; }
+
     public float EngineTorque
     {
         get
